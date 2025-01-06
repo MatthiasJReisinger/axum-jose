@@ -6,6 +6,7 @@ use axum::response::{IntoResponse, Response};
 use axum::{Json, RequestExt, RequestPartsExt};
 use axum_extra::headers::authorization::Bearer;
 use axum_extra::headers::Authorization;
+use axum_extra::typed_header::TypedHeaderRejection;
 use axum_extra::TypedHeader;
 use futures::future::BoxFuture;
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
@@ -63,6 +64,9 @@ where
     }
 }
 
+#[derive(Clone)]
+pub struct Claims(pub serde_json::Value);
+
 impl<S> Service<Request> for AuthorizationService<S>
 where
     S: Service<Request, Response = Response> + Clone + Send + 'static,
@@ -84,7 +88,7 @@ where
             let authorize_result = authorize_request(&mut req, domain, audience).await;
             match authorize_result {
                 Ok(claims) => {
-                    req.extensions_mut().insert(claims);
+                    req.extensions_mut().insert(Claims(claims));
                     inner.call(req).await
                 }
                 Err(auth_error) => Ok(auth_error.into_response()),
@@ -97,14 +101,13 @@ async fn authorize_request(
     req: &mut Request,
     issuer_domain: String,
     audience: String,
-) -> Result<serde_json::Value, AuthError> {
+) -> Result<serde_json::Value, Error> {
     let mut parts: Parts = req.extract_parts::<Parts>().await.expect("infallible");
 
     // Extract the token from the authorization header
     let TypedHeader(Authorization(bearer)) = parts
         .extract::<TypedHeader<Authorization<Bearer>>>()
-        .await
-        .map_err(|_| AuthError::InvalidToken)?;
+        .await?;
 
     authorize_token(bearer.token(), &issuer_domain, &audience).await
 }
@@ -113,40 +116,55 @@ async fn authorize_token(
     token: &str,
     issuer_domain: &str,
     audience: &str,
-) -> Result<serde_json::Value, AuthError> {
+) -> Result<serde_json::Value, Error> {
     // First, just decode the header part of the token, without validating the token, to get the kid.
-    let header = decode_header(token).map_err(|_| AuthError::InvalidToken)?;
-    let kid = header.kid.ok_or_else(|| AuthError::InvalidToken)?;
+    let header = decode_header(token)?;
+    let kid = header.kid.ok_or_else(|| Error::MissingKidError)?;
 
     // Fetch the JWKS from the issuer's domain and find the JWK with the matching kid.
     let mut issuer_url = Url::parse(&issuer_domain).expect("could not parse issuer domain");
     issuer_url.set_path("/.well-known/jwks.json");
-    let jwks_response = reqwest::get(issuer_url).await.unwrap(); // TODO map error
-    let jwks: JwkSet = serde_json::from_str(&jwks_response.text().await.unwrap()).unwrap(); // TODO map error
-    let jwk = jwks.find(&kid).ok_or_else(|| AuthError::InvalidToken)?;
+    let jwks_response = reqwest::get(issuer_url)
+        .await
+        .map_err(|_| Error::TokenValidationError)?;
+    let jwks: JwkSet = serde_json::from_str(
+        &jwks_response
+            .text()
+            .await
+            .map_err(|_| Error::TokenValidationError)?,
+    )
+    .map_err(|_| Error::TokenValidationError)?;
+    let jwk = jwks.find(&kid).ok_or_else(|| Error::InvalidKidError)?;
 
     let decoding_key = match jwk.clone().algorithm {
-        AlgorithmParameters::RSA(ref rsa) => {
-            DecodingKey::from_rsa_components(&rsa.n, &rsa.e).map_err(|_| AuthError::InvalidToken)
-        }
-        _ => Err(AuthError::InvalidToken),
+        AlgorithmParameters::RSA(ref rsa) => DecodingKey::from_rsa_components(&rsa.n, &rsa.e)
+            .map_err(|_| Error::TokenValidationError),
+        _ => Err(Error::TokenValidationError),
     }?;
 
     let mut validation = Validation::new(header.alg);
     validation.set_audience(&[audience.to_string()]);
     validation.set_issuer(&[issuer_domain]);
-    let token = decode::<serde_json::Value>(token, &decoding_key, &validation).unwrap();
-    //.map_err(|_| AuthError::InvalidToken)?;
+    let token = decode::<serde_json::Value>(token, &decoding_key, &validation)
+        .map_err(|_| Error::TokenValidationError)?;
     Ok(token.claims)
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum AuthError {
-    #[error("invalid token")]
-    InvalidToken,
+pub enum Error {
+    #[error(transparent)]
+    JwtError(#[from] jsonwebtoken::errors::Error),
+    #[error("missing kid in token header")]
+    MissingKidError,
+    #[error("token header contains invalid kid")]
+    InvalidKidError,
+    #[error(transparent)]
+    TypedHeaderError(#[from] TypedHeaderRejection),
+    #[error("failed to validate token")]
+    TokenValidationError,
 }
 
-impl IntoResponse for AuthError {
+impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let body = Json(json!({
             "error": self.to_string(),
@@ -166,6 +184,7 @@ mod test {
         Algorithm, EncodingKey, Header,
     };
     use tokio::task;
+    use tokio_util::sync::CancellationToken;
     use wiremock::{
         matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
@@ -266,15 +285,23 @@ mod test {
                 mock_auth_server.jwt_issuer().to_string(),
                 mock_auth_server.jwt_audience().to_string(),
             ));
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
 
-        let resource_task = task::spawn(async move {
-            axum::serve(listener, router).await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let axum_server_addr = listener.local_addr().unwrap();
+
+        let axum_shutdown_token = CancellationToken::new();
+        let axum_shutdown_signal = axum_shutdown_token.clone().cancelled_owned();
+        let _axum_shutdown_guard = axum_shutdown_token.drop_guard();
+        task::spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(axum_shutdown_signal)
+                .await
+                .unwrap();
         });
 
         let client = reqwest::Client::new();
         let response = client
-            .get("http://0.0.0.0:3000/protected")
+            .get(format!("http://{axum_server_addr}/protected"))
             .bearer_auth(mock_auth_server.jwt_token())
             .send()
             .await
@@ -282,8 +309,6 @@ mod test {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.text().await.unwrap(), "authorized");
-
-        resource_task.abort();
     }
 
     #[tokio::test]
@@ -296,15 +321,23 @@ mod test {
                 mock_auth_server.jwt_issuer().to_string(),
                 mock_auth_server.jwt_audience().to_string(),
             ));
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
 
-        let resource_task = task::spawn(async move {
-            axum::serve(listener, router).await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let axum_server_addr = listener.local_addr().unwrap();
+
+        let axum_shutdown_token = CancellationToken::new();
+        let axum_shutdown_signal = axum_shutdown_token.clone().cancelled_owned();
+        let _axum_shutdown_guard = axum_shutdown_token.drop_guard();
+        task::spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(axum_shutdown_signal)
+                .await
+                .unwrap();
         });
 
         let client = reqwest::Client::new();
         let response = client
-            .get("http://0.0.0.0:3000/protected")
+            .get(format!("http://{axum_server_addr}/protected"))
             .send()
             .await
             .unwrap();
@@ -312,9 +345,7 @@ mod test {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(
             response.json::<serde_json::Value>().await.unwrap(),
-            serde_json::json!({"error": "invalid token"})
+            serde_json::json!({"error": "Header of type `authorization` was missing"})
         );
-
-        resource_task.abort();
     }
 }
