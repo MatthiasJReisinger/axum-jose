@@ -81,9 +81,14 @@ where
         let domain = self.issuer_domain.clone();
         let audience = self.audience.clone();
         Box::pin(async move {
-            let claims = authorize_request(&mut req, domain, audience).await.unwrap();
-            req.extensions_mut().insert(claims);
-            inner.call(req).await
+            let authorize_result = authorize_request(&mut req, domain, audience).await;
+            match authorize_result {
+                Ok(claims) => {
+                    req.extensions_mut().insert(claims);
+                    inner.call(req).await
+                }
+                Err(auth_error) => Ok(auth_error.into_response()),
+            }
         })
     }
 }
@@ -146,7 +151,7 @@ impl IntoResponse for AuthError {
         let body = Json(json!({
             "error": self.to_string(),
         }));
-        (StatusCode::BAD_REQUEST, body).into_response()
+        (StatusCode::UNAUTHORIZED, body).into_response()
     }
 }
 
@@ -277,6 +282,38 @@ mod test {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.text().await.unwrap(), "authorized");
+
+        resource_task.abort();
+    }
+
+    #[tokio::test]
+    async fn test_middleware_rejects_unauthorized_request() {
+        let mock_auth_server = MockAuthServer::new().await;
+
+        let router = axum::Router::new()
+            .route("/protected", get(|| async { "authorized" }))
+            .layer(AuthorizationLayer::new(
+                mock_auth_server.jwt_issuer().to_string(),
+                mock_auth_server.jwt_audience().to_string(),
+            ));
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+
+        let resource_task = task::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+
+        let client = reqwest::Client::new();
+        let response = client
+            .get("http://0.0.0.0:3000/protected")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.json::<serde_json::Value>().await.unwrap(),
+            serde_json::json!({"error": "invalid token"})
+        );
 
         resource_task.abort();
     }
