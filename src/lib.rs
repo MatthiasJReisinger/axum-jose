@@ -11,16 +11,45 @@ use futures::future::BoxFuture;
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
 use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
 use serde_json::json;
+use tower::Layer;
 use tower_service::Service;
 use url::Url;
 
-pub struct Authorizer<S> {
+#[derive(Clone)]
+pub struct AuthorizationLayer {
+    issuer_domain: String,
+    audience: String,
+}
+
+impl AuthorizationLayer {
+    pub fn new(issuer_domain: String, audience: String) -> Self {
+        Self {
+            issuer_domain,
+            audience,
+        }
+    }
+}
+
+impl<S> Layer<S> for AuthorizationLayer {
+    type Service = AuthorizationService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        AuthorizationService {
+            inner,
+            issuer_domain: self.issuer_domain.clone(),
+            audience: self.audience.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct AuthorizationService<S> {
     inner: S,
     issuer_domain: String,
     audience: String,
 }
 
-impl<S> Authorizer<S>
+impl<S> AuthorizationService<S>
 where
     S: Service<Request, Response = Response> + Clone + Send + 'static,
     S::Future: Send + 'static,
@@ -34,7 +63,7 @@ where
     }
 }
 
-impl<S> Service<Request> for Authorizer<S>
+impl<S> Service<Request> for AuthorizationService<S>
 where
     S: Service<Request, Response = Response> + Clone + Send + 'static,
     S::Future: Send + 'static,
@@ -72,13 +101,13 @@ async fn authorize_request(
         .await
         .map_err(|_| AuthError::InvalidToken)?;
 
-    authorize_token(bearer.token(), issuer_domain, audience).await
+    authorize_token(bearer.token(), &issuer_domain, &audience).await
 }
 
 async fn authorize_token(
     token: &str,
-    issuer_domain: String,
-    audience: String,
+    issuer_domain: &str,
+    audience: &str,
 ) -> Result<serde_json::Value, AuthError> {
     // First, just decode the header part of the token, without validating the token, to get the kid.
     let header = decode_header(token).map_err(|_| AuthError::InvalidToken)?;
@@ -99,7 +128,7 @@ async fn authorize_token(
     }?;
 
     let mut validation = Validation::new(header.alg);
-    validation.set_audience(&[audience.clone()]);
+    validation.set_audience(&[audience.to_string()]);
     validation.set_issuer(&[issuer_domain]);
     let token = decode::<serde_json::Value>(token, &decoding_key, &validation).unwrap();
     //.map_err(|_| AuthError::InvalidToken)?;
@@ -125,64 +154,130 @@ impl IntoResponse for AuthError {
 mod test {
     use std::time::SystemTime;
 
+    use axum::routing::get;
+    use http::StatusCode;
     use jsonwebtoken::{
         jwk::{AlgorithmParameters, CommonParameters, KeyAlgorithm},
         Algorithm, EncodingKey, Header,
     };
+    use tokio::task;
     use wiremock::{
         matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
     };
 
-    use crate::authorize_token;
+    use crate::{authorize_token, AuthorizationLayer};
+
+    struct MockAuthServer {
+        _inner_server: MockServer,
+        jwt: String,
+        jwt_audience: String,
+        jwt_issuer: String,
+    }
+
+    impl MockAuthServer {
+        pub async fn new() -> MockAuthServer {
+            let rsa_private_key = openssl::rsa::Rsa::generate(2048).unwrap();
+
+            let jwk = jsonwebtoken::jwk::Jwk {
+                common: jsonwebtoken::jwk::CommonParameters {
+                    key_algorithm: Some(KeyAlgorithm::RS256),
+                    key_id: Some("42".to_string()),
+                    ..CommonParameters::default()
+                },
+                algorithm: AlgorithmParameters::RSA(jsonwebtoken::jwk::RSAKeyParameters {
+                    n: base64_url::encode(&rsa_private_key.n().to_vec()),
+                    e: base64_url::encode(&rsa_private_key.e().to_vec()),
+                    key_type: jsonwebtoken::jwk::RSAKeyType::RSA,
+                }),
+            };
+            let jwks = jsonwebtoken::jwk::JwkSet { keys: vec![jwk] };
+
+            let mock_auth_server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/.well-known/jwks.json"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(jwks))
+                .mount(&mock_auth_server)
+                .await;
+
+            let issuer_domain = mock_auth_server.uri();
+            let audience = "https://my.token.audience".to_string();
+            let issued_time = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap();
+            let expires_at = issued_time + std::time::Duration::from_secs(3600);
+
+            let mut header = Header::new(Algorithm::RS256);
+            header.kid = Some("42".to_string());
+            let claims = serde_json::json!({ "sub": "1234567890", "name": "John Doe", "admin": true, "aud": audience, "iss": issuer_domain, "iat": issued_time.as_secs(), "exp": expires_at.as_secs() });
+            let jwt = jsonwebtoken::encode(
+                &header,
+                &claims,
+                &EncodingKey::from_rsa_der(&rsa_private_key.private_key_to_der().unwrap()),
+            )
+            .unwrap();
+
+            MockAuthServer {
+                _inner_server: mock_auth_server,
+                jwt,
+                jwt_audience: audience,
+                jwt_issuer: issuer_domain,
+            }
+        }
+
+        pub fn jwt_issuer(&self) -> &str {
+            &self.jwt_issuer
+        }
+
+        pub fn jwt_audience(&self) -> &str {
+            &self.jwt_audience
+        }
+
+        pub fn jwt_token(&self) -> &str {
+            &self.jwt
+        }
+    }
 
     #[tokio::test]
     async fn test_authorize_token() {
-        let rsa = openssl::rsa::Rsa::generate(2048).unwrap();
-        let n = base64_url::encode(&rsa.n().to_vec());
-        let e = base64_url::encode(&rsa.e().to_vec());
+        let mock_auth_server = MockAuthServer::new().await;
 
-        let jwk = jsonwebtoken::jwk::Jwk {
-            common: jsonwebtoken::jwk::CommonParameters {
-                key_algorithm: Some(KeyAlgorithm::RS256),
-                key_id: Some("42".to_string()),
-                ..CommonParameters::default()
-            },
-            algorithm: AlgorithmParameters::RSA(jsonwebtoken::jwk::RSAKeyParameters {
-                n,
-                e,
-                key_type: jsonwebtoken::jwk::RSAKeyType::RSA,
-            }),
-        };
-        let jwks = jsonwebtoken::jwk::JwkSet { keys: vec![jwk] };
-
-        let mock_auth_server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/.well-known/jwks.json"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(jwks))
-            .mount(&mock_auth_server)
-            .await;
-
-        let issuer_domain = mock_auth_server.uri();
-        let audience = "https://my.token.audience".to_string();
-        let issued_time = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap();
-        let expires_at = issued_time + std::time::Duration::from_secs(3600);
-
-        let mut header = Header::new(Algorithm::RS256);
-        header.kid = Some("42".to_string());
-        let claims = serde_json::json!({ "sub": "1234567890", "name": "John Doe", "admin": true, "aud": audience, "iss": issuer_domain, "iat": issued_time.as_secs(), "exp": expires_at.as_secs() });
-        let token = jsonwebtoken::encode(
-            &header,
-            &claims,
-            &EncodingKey::from_rsa_der(&rsa.private_key_to_der().unwrap()),
+        let _decoded_claims = authorize_token(
+            mock_auth_server.jwt_token(),
+            mock_auth_server.jwt_issuer(),
+            mock_auth_server.jwt_audience(),
         )
+        .await
         .unwrap();
+    }
 
-        let decoded_claims = authorize_token(&token, issuer_domain, audience)
+    #[tokio::test]
+    async fn test_middleware_accepts_valid_token() {
+        let mock_auth_server = MockAuthServer::new().await;
+
+        let router = axum::Router::new()
+            .route("/protected", get(|| async { "authorized" }))
+            .layer(AuthorizationLayer::new(
+                mock_auth_server.jwt_issuer().to_string(),
+                mock_auth_server.jwt_audience().to_string(),
+            ));
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+
+        let resource_task = task::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+
+        let client = reqwest::Client::new();
+        let response = client
+            .get("http://0.0.0.0:3000/protected")
+            .bearer_auth(mock_auth_server.jwt_token())
+            .send()
             .await
             .unwrap();
-        assert_eq!(decoded_claims, claims);
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.text().await.unwrap(), "authorized");
+
+        resource_task.abort();
     }
 }
