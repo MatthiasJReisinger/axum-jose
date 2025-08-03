@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use axum::extract::Request;
@@ -11,25 +10,29 @@ use axum_extra::TypedHeader;
 use futures::future::BoxFuture;
 use jsonwebtoken::jwk::AlgorithmParameters;
 use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
-use oidc::OidcProvider;
 use tower::Layer;
 use tower_service::Service;
 use url::Url;
 
 mod error;
-mod oidc;
+mod jwks_cache;
+mod remote_jwk_set;
 
 pub use error::Error;
 
+use crate::remote_jwk_set::RemoteJwkSet;
+
 #[derive(Clone)]
 pub struct AuthorizationLayer {
+    remote_jwk_set: RemoteJwkSet,
     issuer_url: Url,
     audience: String,
 }
 
 impl AuthorizationLayer {
-    pub fn new(issuer_url: Url, audience: String) -> Self {
+    pub fn new(jwks_url: Url, issuer_url: Url, audience: String) -> Self {
         Self {
+            remote_jwk_set: RemoteJwkSet::new(jwks_url),
             issuer_url,
             audience,
         }
@@ -42,8 +45,9 @@ impl<S> Layer<S> for AuthorizationLayer {
     fn layer(&self, inner: S) -> Self::Service {
         AuthorizationService {
             inner,
+            remote_jwk_set: self.remote_jwk_set.clone(),
+            issuer_url: self.issuer_url.clone(),
             audience: self.audience.clone(),
-            oidc_provider: Arc::new(OidcProvider::new(self.issuer_url.clone())),
         }
     }
 }
@@ -51,8 +55,9 @@ impl<S> Layer<S> for AuthorizationLayer {
 #[derive(Clone)]
 pub struct AuthorizationService<S> {
     inner: S,
+    remote_jwk_set: RemoteJwkSet,
+    issuer_url: Url,
     audience: String,
-    oidc_provider: Arc<OidcProvider>,
 }
 
 #[derive(Clone)]
@@ -72,11 +77,14 @@ where
     }
 
     fn call(&mut self, mut req: Request) -> Self::Future {
-        let mut inner = self.inner.clone();
-        let oidc_provider = self.oidc_provider.clone();
+        let clone = self.inner.clone();
+        let mut inner = std::mem::replace(&mut self.inner, clone);
+        let remote_jwk_set = self.remote_jwk_set.clone();
+        let issuer_url = self.issuer_url.clone();
         let audience = self.audience.clone();
         Box::pin(async move {
-            let authorize_result = authorize_request(&mut req, &oidc_provider, audience).await;
+            let authorize_result =
+                authorize_request(&mut req, remote_jwk_set, issuer_url, audience).await;
             match authorize_result {
                 Ok(claims) => {
                     req.extensions_mut().insert(Claims(claims));
@@ -90,7 +98,8 @@ where
 
 async fn authorize_request(
     req: &mut Request,
-    oidc_provider: &OidcProvider,
+    remote_jwk_set: RemoteJwkSet,
+    issuer_url: Url,
     audience: String,
 ) -> Result<serde_json::Value, Error> {
     let mut parts: Parts = req.extract_parts::<Parts>().await.expect("infallible");
@@ -100,12 +109,13 @@ async fn authorize_request(
         .extract::<TypedHeader<Authorization<Bearer>>>()
         .await?;
 
-    authorize_token(bearer.token(), &oidc_provider, &audience).await
+    authorize_token(bearer.token(), remote_jwk_set, issuer_url, &audience).await
 }
 
 async fn authorize_token(
     token: &str,
-    oidc_provider: &OidcProvider,
+    mut remote_jwk_set: RemoteJwkSet,
+    issuer_url: Url,
     audience: &str,
 ) -> Result<serde_json::Value, Error> {
     // First, just decode the header part of the token, without validating the token, to get the kid.
@@ -113,7 +123,8 @@ async fn authorize_token(
     let kid = header.kid.ok_or_else(|| Error::MissingKidError)?;
 
     // Fetch the JWKS from the issuer's domain and find the JWK with the matching kid.
-    let jwks = oidc_provider.jwks().await?;
+    // TODO use `tower` to add caching and rate-limiting (in this order from outer to inner-most service)
+    let jwks = remote_jwk_set.jwk_set().await?;
     let jwk = jwks.find(&kid).ok_or_else(|| Error::InvalidKidError)?;
 
     let decoding_key = match jwk.clone().algorithm {
@@ -124,7 +135,7 @@ async fn authorize_token(
 
     let mut validation = Validation::new(header.alg);
     validation.set_audience(&[audience.to_string()]);
-    validation.set_issuer(&[oidc_provider.issuer()]);
+    validation.set_issuer(&[issuer_url]);
     let token = decode::<serde_json::Value>(token, &decoding_key, &validation)
         .map_err(|_| Error::TokenValidationError)?;
     Ok(token.claims)
@@ -148,11 +159,7 @@ mod test {
         Mock, MockServer, ResponseTemplate,
     };
 
-    use crate::{
-        authorize_token,
-        oidc::{OidcProvider, OpenIdConfiguration, OIDC_CONFIGURATION_ENDPOINT},
-        AuthorizationLayer,
-    };
+    use crate::{authorize_token, remote_jwk_set::RemoteJwkSet, AuthorizationLayer};
 
     struct MockAuthServer {
         _inner_server: MockServer,
@@ -180,16 +187,6 @@ mod test {
             let jwks = jsonwebtoken::jwk::JwkSet { keys: vec![jwk] };
 
             let mock_auth_server = MockServer::start().await;
-
-            Mock::given(method("GET"))
-                .and(path(OIDC_CONFIGURATION_ENDPOINT))
-                .respond_with(
-                    ResponseTemplate::new(200).set_body_json(OpenIdConfiguration {
-                        jwks_uri: format!("{}/.well-known/jwks.json", mock_auth_server.uri()),
-                    }),
-                )
-                .mount(&mock_auth_server)
-                .await;
 
             Mock::given(method("GET"))
                 .and(path(".well-known/jwks.json"))
@@ -226,6 +223,10 @@ mod test {
             &self.jwt_issuer
         }
 
+        pub fn jwts_url(&self) -> Url {
+            self.jwt_issuer.join(".well-known/jwks.json").unwrap()
+        }
+
         pub fn jwt_audience(&self) -> &str {
             &self.jwt_audience
         }
@@ -241,7 +242,8 @@ mod test {
 
         let _decoded_claims = authorize_token(
             mock_auth_server.jwt_token(),
-            &OidcProvider::new(mock_auth_server.jwt_issuer().clone()),
+            RemoteJwkSet::new(mock_auth_server.jwts_url()),
+            mock_auth_server.jwt_issuer().clone(),
             mock_auth_server.jwt_audience(),
         )
         .await
@@ -255,6 +257,7 @@ mod test {
         let router = axum::Router::new()
             .route("/protected", get(|| async { "authorized" }))
             .layer(AuthorizationLayer::new(
+                mock_auth_server.jwts_url(),
                 mock_auth_server.jwt_issuer().clone(),
                 mock_auth_server.jwt_audience().to_string(),
             ));
@@ -291,6 +294,7 @@ mod test {
         let router = axum::Router::new()
             .route("/protected", get(|| async { "authorized" }))
             .layer(AuthorizationLayer::new(
+                mock_auth_server.jwts_url(),
                 mock_auth_server.jwt_issuer().clone(),
                 mock_auth_server.jwt_audience().to_string(),
             ));

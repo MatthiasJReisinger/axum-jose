@@ -18,6 +18,12 @@ pub enum Error {
     TypedHeaderError(#[from] TypedHeaderRejection),
     #[error("failed to validate token")]
     TokenValidationError,
+    #[error("failed to fetch JWK set")]
+    JwkSetRequestError(#[from] reqwest::Error),
+    #[error("failed to fetch JWK set (status code: {status_code})")]
+    JwkSetResponseError { status_code: StatusCode },
+    #[error("rate limit error")]
+    JwkSetRateLimitError,
 }
 
 impl IntoResponse for Error {
