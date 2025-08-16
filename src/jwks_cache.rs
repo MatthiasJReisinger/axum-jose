@@ -10,6 +10,9 @@ use tower::{Layer, Service};
 
 use crate::Error;
 
+/// The key under which the JWK Set is cached in the Moka cache.
+const CACHE_KEY: &str = "jwk_set";
+
 pub struct JwksCacheLayer {
     cache: moka::future::Cache<String, JwkSet>,
 }
@@ -43,6 +46,7 @@ pub struct JwksCacheService<S> {
     state: PollState,
 }
 
+/// The states the service assumes during its polling lifecycle.
 enum PollState {
     New,
     CachePending {
@@ -82,7 +86,7 @@ where
             PollState::New => {
                 // Create a Send future for the cache lookup
                 let cache = self.cache.clone();
-                let mut cache_future = Box::pin(async move { cache.get("jwk_set").await });
+                let mut cache_future = Box::pin(async move { cache.get(CACHE_KEY).await });
 
                 match cache_future.as_mut().poll(cx) {
                     Poll::Ready(Some(jwks)) => {
@@ -153,15 +157,18 @@ where
                 Box::pin(async move { Ok(jwks) })
             }
             PollState::InnerReady => {
-                // If we are ready to call the inner service, do it.
+                // If the inner service is ready, `call` it to fetch the JwkSet and cache it.
+                // Move the original service into the closure instead of its clone. This makes sure that the original service is
+                // `call`ed instead of the cloned one, which might not be ready yet (`poll_ready` hasn't been called on the
+                // clone yet).
+                // See [docs](https://docs.rs/tower/latest/tower/trait.Service.html#be-careful-when-cloning-inner-services).
                 let inner_clone = self.inner.clone();
                 let mut inner = std::mem::replace(&mut self.inner, inner_clone);
                 let cache = self.cache.clone();
-                self.state = PollState::New; // Reset for next call
                 Box::pin(async move {
                     // Call the inner service to fetch the JwkSet and cache it.
                     let jwks = inner.call(()).await?;
-                    cache.insert("jwk_set".to_string(), jwks.clone()).await;
+                    cache.insert(CACHE_KEY.to_string(), jwks.clone()).await;
                     Ok(jwks)
                 })
             }
