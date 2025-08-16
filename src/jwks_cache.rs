@@ -1,4 +1,5 @@
 use std::{
+    future::Future,
     task::{Context, Poll},
     time::Duration,
 };
@@ -45,7 +46,7 @@ pub struct JwksCacheService<S> {
 enum PollState {
     New,
     CachePending {
-        cache_future: std::pin::Pin<Box<dyn std::future::Future<Output = Option<JwkSet>> + Send>>,
+        cache_future: BoxFuture<'static, Option<JwkSet>>,
     },
     CacheReady {
         jwks: JwkSet,
@@ -79,11 +80,9 @@ where
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         match &mut self.state {
             PollState::New => {
-                // Create a Send  future for the cache lookup
+                // Create a Send future for the cache lookup
                 let cache = self.cache.clone();
-                let mut cache_future: std::pin::Pin<
-                    Box<dyn std::future::Future<Output = Option<JwkSet>> + Send>,
-                > = Box::pin(async move { cache.get("jwk_set").await });
+                let mut cache_future = Box::pin(async move { cache.get("jwk_set").await });
 
                 match cache_future.as_mut().poll(cx) {
                     Poll::Ready(Some(jwks)) => {
