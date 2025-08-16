@@ -24,6 +24,8 @@ pub enum Error {
     JwkSetResponseError { status_code: StatusCode },
     #[error("rate limit error")]
     JwkSetRateLimitError,
+    #[error("cache error")]
+    JwkSetCacheError,
 }
 
 impl IntoResponse for Error {

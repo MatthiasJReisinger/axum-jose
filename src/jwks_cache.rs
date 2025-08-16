@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use futures::{future::BoxFuture, FutureExt};
+use futures::future::BoxFuture;
 use jsonwebtoken::jwk::JwkSet;
 use tower::{Layer, Service};
 
@@ -36,13 +36,38 @@ impl<S> Layer<S> for JwksCacheLayer {
 }
 
 /// Can safely be cloned and shared across threads since moka internally uses an Arc.
-pub struct JwksCacheService<'a, S> {
+pub struct JwksCacheService<S> {
     inner: S,
     cache: moka::future::Cache<String, JwkSet>,
-    state: PollState<'a>,
+    state: PollState,
 }
 
-impl<'a, S> Service<()> for JwksCacheService<'a, S>
+enum PollState {
+    New,
+    CachePending {
+        cache_future: std::pin::Pin<Box<dyn std::future::Future<Output = Option<JwkSet>> + Send>>,
+    },
+    CacheReady {
+        jwks: JwkSet,
+    },
+    InnerPending,
+    InnerReady,
+}
+
+impl<S> Clone for JwksCacheService<S>
+where
+    S: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            cache: self.cache.clone(),
+            state: PollState::New, // Reset state when cloning
+        }
+    }
+}
+
+impl<S> Service<()> for JwksCacheService<S>
 where
     S: Service<(), Response = JwkSet, Error = Error> + Clone + Send + 'static,
     S::Future: Send + 'static,
@@ -52,10 +77,13 @@ where
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        match self.state {
+        match &mut self.state {
             PollState::New => {
-                // If we are in the New state, we need to start the cache future.
-                let mut cache_future = self.cache.get("jwk_set").boxed::<'a>();
+                // Create a Send  future for the cache lookup
+                let cache = self.cache.clone();
+                let mut cache_future: std::pin::Pin<
+                    Box<dyn std::future::Future<Output = Option<JwkSet>> + Send>,
+                > = Box::pin(async move { cache.get("jwk_set").await });
 
                 match cache_future.as_mut().poll(cx) {
                     Poll::Ready(Some(jwks)) => {
@@ -64,19 +92,27 @@ where
                         Poll::Ready(Ok(()))
                     }
                     Poll::Ready(None) => {
-                        self.state = PollState::InnerPending;
-                        Poll::Pending
+                        // If the cache does not contain any JwkSet (either to not having been populated yet or due to
+                        // having run into its TTL), immediately poll the inner service.
+                        match self.inner.poll_ready(cx) {
+                            Poll::Ready(Ok(())) => {
+                                self.state = PollState::InnerReady;
+                                Poll::Ready(Ok(()))
+                            }
+                            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+                            Poll::Pending => {
+                                self.state = PollState::InnerPending;
+                                Poll::Pending
+                            }
+                        }
                     }
                     Poll::Pending => {
-                        // Cache is not ready, transition to CachePending state.
-                        self.state = PollState::CachePending {
-                            cache_future: cache_future,
-                        };
+                        self.state = PollState::CachePending { cache_future };
                         Poll::Pending
                     }
                 }
             }
-            PollState::CachePending { ref cache_future } => {
+            PollState::CachePending { cache_future } => {
                 // If we are waiting for the cache to be ready, we need to poll it.
                 match cache_future.as_mut().poll(cx) {
                     Poll::Ready(Some(jwks)) => {
@@ -95,7 +131,14 @@ where
                 // If the cache is ready, we can return Poll::Ready.
                 Poll::Ready(Ok(()))
             }
-            PollState::InnerPending => todo!(),
+            PollState::InnerPending => match self.inner.poll_ready(cx) {
+                Poll::Ready(Ok(())) => {
+                    self.state = PollState::InnerReady;
+                    Poll::Ready(Ok(()))
+                }
+                Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+                Poll::Pending => Poll::Pending,
+            },
             PollState::InnerReady => {
                 // If the inner service is ready, we can return Poll::Ready.
                 Poll::Ready(Ok(()))
@@ -110,34 +153,23 @@ where
                 let jwks = jwks.clone();
                 Box::pin(async move { Ok(jwks) })
             }
-            PollState::InnerPending => {
-                // If we are waiting for the inner service, we need to call it.
-                let clone = self.inner.clone();
-                let mut inner = std::mem::replace(&mut self.inner, clone);
+            PollState::InnerReady => {
+                // If we are ready to call the inner service, do it.
+                let inner_clone = self.inner.clone();
+                let mut inner = std::mem::replace(&mut self.inner, inner_clone);
                 let cache = self.cache.clone();
+                self.state = PollState::New; // Reset for next call
                 Box::pin(async move {
                     // Call the inner service to fetch the JwkSet and cache it.
                     let jwks = inner.call(()).await?;
-                    cache.insert("jwk_set".to_string(), jwks.clone());
+                    cache.insert("jwk_set".to_string(), jwks.clone()).await;
                     Ok(jwks)
                 })
             }
             _ => {
                 // If we are not in a ready state, we return a pending future.
-                Box::pin(async { Err(Error::JwkSetRateLimitError) })
+                Box::pin(async { Err(Error::JwkSetCacheError) })
             }
         }
     }
-}
-
-enum PollState<'a> {
-    New,
-    CachePending {
-        cache_future: BoxFuture<'a, Option<JwkSet>>,
-    },
-    CacheReady {
-        jwks: JwkSet,
-    },
-    InnerPending,
-    InnerReady,
 }

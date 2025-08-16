@@ -6,14 +6,14 @@ use std::{
 use futures::future::BoxFuture;
 use jsonwebtoken::jwk::JwkSet;
 use reqwest::Client;
-use tower::{util::BoxCloneSyncService, Service, ServiceBuilder, ServiceExt};
+use tower::{util::BoxCloneService, Service, ServiceBuilder, ServiceExt};
 use url::Url;
 
 use crate::{jwks_cache::JwksCacheLayer, Error};
 
 #[derive(Clone)]
 pub struct RemoteJwkSet {
-    service_tower: BoxCloneSyncService<(), JwkSet, Error>,
+    service_tower: BoxCloneService<(), JwkSet, Error>,
 }
 
 impl RemoteJwkSet {
@@ -28,7 +28,7 @@ impl RemoteJwkSet {
             .service(JwkSetRequestService { http_client, url });
 
         Self {
-            service_tower: BoxCloneSyncService::new(service_tower),
+            service_tower: BoxCloneService::new(service_tower),
         }
     }
 
@@ -38,6 +38,7 @@ impl RemoteJwkSet {
 }
 
 /// Helper service wrapping a `reqwest::Client` to fetch a JWK Set from a given URL.
+#[derive(Clone)]
 struct JwkSetRequestService {
     http_client: Client,
     url: Url,

@@ -79,6 +79,7 @@ where
     fn call(&mut self, mut req: Request) -> Self::Future {
         let clone = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, clone);
+        // TODO do we have to be aware of the cloning here?
         let remote_jwk_set = self.remote_jwk_set.clone();
         let issuer_url = self.issuer_url.clone();
         let audience = self.audience.clone();
@@ -124,6 +125,7 @@ async fn authorize_token(
 
     // Fetch the JWKS from the issuer's domain and find the JWK with the matching kid.
     // TODO use `tower` to add caching and rate-limiting (in this order from outer to inner-most service)
+    println!("Fetching JWKS");
     let jwks = remote_jwk_set.jwk_set().await?;
     let jwk = jwks.find(&kid).ok_or_else(|| Error::InvalidKidError)?;
 
