@@ -25,12 +25,9 @@ pub struct AuthorizationLayer {
 }
 
 impl AuthorizationLayer {
-    pub fn new(jwks_url: Url, issuer_url: Url, audience: String) -> Self {
+    pub fn new(remote_jwk_set: RemoteJwkSet, issuer_url: Url, audience: String) -> Self {
         Self {
-            remote_jwk_set: RemoteJwkSet::builder(jwks_url)
-                .with_cache(std::time::Duration::from_secs(300))
-                .with_rate_limit(5, std::time::Duration::from_secs(1))
-                .build(),
+            remote_jwk_set,
             issuer_url,
             audience,
         }
@@ -162,7 +159,7 @@ mod test {
     };
 
     use super::{authorize_token, AuthorizationLayer};
-    use crate::remote_jwk_set::RemoteJwkSetBuilder;
+    use crate::remote_jwk_set::{RemoteJwkSet, RemoteJwkSetBuilder};
 
     struct MockAuthServer {
         _inner_server: MockServer,
@@ -259,10 +256,12 @@ mod test {
     async fn test_middleware_accepts_valid_token() {
         let mock_auth_server = MockAuthServer::new().await;
 
+        let remote_jwk_set = RemoteJwkSet::builder(mock_auth_server.jwts_url()).build();
+
         let router = axum::Router::new()
             .route("/protected", get(|| async { "authorized" }))
             .layer(AuthorizationLayer::new(
-                mock_auth_server.jwts_url(),
+                remote_jwk_set,
                 mock_auth_server.jwt_issuer().clone(),
                 mock_auth_server.jwt_audience().to_string(),
             ));
@@ -296,10 +295,12 @@ mod test {
     async fn test_middleware_rejects_unauthorized_request() {
         let mock_auth_server = MockAuthServer::new().await;
 
+        let remote_jwk_set = RemoteJwkSet::builder(mock_auth_server.jwts_url()).build();
+
         let router = axum::Router::new()
             .route("/protected", get(|| async { "authorized" }))
             .layer(AuthorizationLayer::new(
-                mock_auth_server.jwts_url(),
+                remote_jwk_set,
                 mock_auth_server.jwt_issuer().clone(),
                 mock_auth_server.jwt_audience().to_string(),
             ));
