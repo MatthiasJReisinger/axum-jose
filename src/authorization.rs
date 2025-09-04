@@ -28,7 +28,7 @@ impl AuthorizationLayer {
     pub fn new(jwks_url: Url, issuer_url: Url, audience: String) -> Self {
         Self {
             remote_jwk_set: RemoteJwkSet::builder(jwks_url)
-                .with_cache()
+                .with_cache(std::time::Duration::from_secs(300))
                 .with_rate_limit(5, std::time::Duration::from_secs(1))
                 .build(),
             issuer_url,

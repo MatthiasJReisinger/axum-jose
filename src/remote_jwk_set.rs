@@ -14,6 +14,10 @@ use url::Url;
 
 use crate::{jwks_cache::JwksCacheLayer, Error};
 
+struct CacheConfig {
+    time_to_live: Duration,
+}
+
 struct RateLimitConfig {
     num: u64,
     per: Duration,
@@ -22,7 +26,7 @@ struct RateLimitConfig {
 /// Builder for configuring a `RemoteJwkSet` with optional caching and rate limiting.
 pub struct RemoteJwkSetBuilder {
     url: Url,
-    enable_cache: bool,
+    cache_config: Option<CacheConfig>,
     rate_limit_config: Option<RateLimitConfig>,
 }
 
@@ -31,14 +35,14 @@ impl RemoteJwkSetBuilder {
     pub fn new(url: Url) -> Self {
         Self {
             url,
-            enable_cache: false,
+            cache_config: None,
             rate_limit_config: None,
         }
     }
 
     /// Enables caching to avoid re-fetching the remote JWK set on every authentication request.
-    pub fn with_cache(mut self) -> Self {
-        self.enable_cache = true;
+    pub fn with_cache(mut self, time_to_live: Duration) -> Self {
+        self.cache_config = Some(CacheConfig { time_to_live });
         self
     }
 
@@ -56,11 +60,9 @@ impl RemoteJwkSetBuilder {
             url: self.url,
         };
 
-        let cache_layer = if self.enable_cache {
-            Some(JwksCacheLayer::new())
-        } else {
-            None
-        };
+        let cache_layer = self
+            .cache_config
+            .map(|cache_config| JwksCacheLayer::new(cache_config.time_to_live));
 
         let rate_limit_layer = self.rate_limit_config.map(|rate_limit_config| {
             layer_fn(move |inner| {

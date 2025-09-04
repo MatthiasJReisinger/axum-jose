@@ -18,10 +18,10 @@ pub struct JwksCacheLayer {
 }
 
 impl JwksCacheLayer {
-    pub fn new() -> Self {
+    pub fn new(time_to_live: Duration) -> Self {
         let cache = moka::future::Cache::<String, JwkSet>::builder()
             .max_capacity(1)
-            .time_to_live(Duration::from_secs(42))
+            .time_to_live(time_to_live)
             .build();
         JwksCacheLayer { cache }
     }
