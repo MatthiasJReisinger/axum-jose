@@ -6,10 +6,86 @@ use std::{
 use futures::future::BoxFuture;
 use jsonwebtoken::jwk::JwkSet;
 use reqwest::Client;
-use tower::{util::BoxCloneService, Service, ServiceBuilder, ServiceExt};
+use tower::{
+    buffer::BufferLayer, util::BoxCloneService, Layer, Service, ServiceBuilder, ServiceExt,
+};
+use tower_layer::layer_fn;
 use url::Url;
 
 use crate::{jwks_cache::JwksCacheLayer, Error};
+
+struct RateLimitConfig {
+    num: u64,
+    per: Duration,
+}
+
+/// Builder for configuring a `RemoteJwkSet` with optional caching and rate limiting.
+pub struct RemoteJwkSetBuilder {
+    url: Url,
+    enable_cache: bool,
+    rate_limit_config: Option<RateLimitConfig>,
+}
+
+impl RemoteJwkSetBuilder {
+    /// Creates a new builder with the given JWKS URL.
+    pub fn new(url: Url) -> Self {
+        Self {
+            url,
+            enable_cache: false,
+            rate_limit_config: None,
+        }
+    }
+
+    /// Enables caching to avoid re-fetching the remote JWK set on every authentication request.
+    pub fn with_cache(mut self) -> Self {
+        self.enable_cache = true;
+        self
+    }
+
+    /// Add rate limiting.
+    pub fn with_rate_limit(mut self, num: u64, per: Duration) -> Self {
+        self.rate_limit_config = Some(RateLimitConfig { num, per });
+        self
+    }
+
+    /// Builds the `RemoteJwkSet` with the configured options.
+    pub fn build(self) -> RemoteJwkSet {
+        let http_client = Client::new();
+        let request_service = JwkSetRequestService {
+            http_client,
+            url: self.url,
+        };
+
+        let cache_layer = if self.enable_cache {
+            Some(JwksCacheLayer::new())
+        } else {
+            None
+        };
+
+        let rate_limit_layer = self.rate_limit_config.map(|rate_limit_config| {
+            layer_fn(move |inner| {
+                let rate_limit =
+                    tower::limit::RateLimitLayer::new(rate_limit_config.num, rate_limit_config.per);
+                let rate_limited_service = rate_limit.layer(inner);
+
+                // Wrap the rate limited service in another buffer service to make it `Clone`.
+                let buffered_service = BufferLayer::new(1024).layer(rate_limited_service);
+
+                // Finally, map any errors to our own error type.
+                buffered_service.map_err(|_| Error::JwkSetRateLimitError)
+            })
+        });
+
+        let service_tower = ServiceBuilder::new()
+            .option_layer(cache_layer)
+            .option_layer(rate_limit_layer)
+            .service(request_service);
+
+        RemoteJwkSet {
+            service_tower: BoxCloneService::new(service_tower),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct RemoteJwkSet {
@@ -17,19 +93,9 @@ pub struct RemoteJwkSet {
 }
 
 impl RemoteJwkSet {
-    pub fn new(url: Url) -> Self {
-        let url = url.clone();
-        let http_client = Client::new();
-        let service_tower = ServiceBuilder::new()
-            .layer(JwksCacheLayer::new())
-            .map_err(|_| Error::JwkSetRateLimitError)
-            .buffer(1024)
-            .rate_limit(5, Duration::from_secs(1))
-            .service(JwkSetRequestService { http_client, url });
-
-        Self {
-            service_tower: BoxCloneService::new(service_tower),
-        }
+    /// Creates a builder for configuring a `RemoteJwkSet`.
+    pub fn builder(url: Url) -> RemoteJwkSetBuilder {
+        RemoteJwkSetBuilder::new(url)
     }
 
     pub async fn jwk_set(&mut self) -> Result<JwkSet, Error> {

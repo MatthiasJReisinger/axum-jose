@@ -27,7 +27,10 @@ pub struct AuthorizationLayer {
 impl AuthorizationLayer {
     pub fn new(jwks_url: Url, issuer_url: Url, audience: String) -> Self {
         Self {
-            remote_jwk_set: RemoteJwkSet::new(jwks_url),
+            remote_jwk_set: RemoteJwkSet::builder(jwks_url)
+                .with_cache()
+                .with_rate_limit(5, std::time::Duration::from_secs(1))
+                .build(),
             issuer_url,
             audience,
         }
@@ -79,7 +82,6 @@ where
         let inner_clone = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, inner_clone);
 
-        // TODO do we have to be aware of the cloning here?
         let remote_jwk_set = self.remote_jwk_set.clone();
         let issuer_url = self.issuer_url.clone();
         let audience = self.audience.clone();
@@ -124,8 +126,6 @@ async fn authorize_token(
     let kid = header.kid.ok_or_else(|| Error::MissingKidError)?;
 
     // Fetch the JWKS from the issuer's domain and find the JWK with the matching kid.
-    // TODO use `tower` to add caching and rate-limiting (in this order from outer to inner-most service)
-    println!("Fetching JWKS");
     let jwks = remote_jwk_set.jwk_set().await?;
     let jwk = jwks.find(&kid).ok_or_else(|| Error::InvalidKidError)?;
 
@@ -162,7 +162,7 @@ mod test {
     };
 
     use super::{authorize_token, AuthorizationLayer};
-    use crate::remote_jwk_set::RemoteJwkSet;
+    use crate::remote_jwk_set::RemoteJwkSetBuilder;
 
     struct MockAuthServer {
         _inner_server: MockServer,
@@ -243,9 +243,11 @@ mod test {
     async fn test_authorize_token() {
         let mock_auth_server = MockAuthServer::new().await;
 
+        let remote_jwk_set = RemoteJwkSetBuilder::new(mock_auth_server.jwts_url()).build();
+
         let _decoded_claims = authorize_token(
             mock_auth_server.jwt_token(),
-            RemoteJwkSet::new(mock_auth_server.jwts_url()),
+            remote_jwk_set,
             mock_auth_server.jwt_issuer().clone(),
             mock_auth_server.jwt_audience(),
         )
