@@ -114,7 +114,7 @@ async fn authorize_request(
 
 async fn authorize_token(
     token: &str,
-    mut remote_jwk_set: RemoteJwkSet,
+    remote_jwk_set: RemoteJwkSet,
     issuer_url: Url,
     audience: &str,
 ) -> Result<serde_json::Value, Error> {
@@ -123,8 +123,10 @@ async fn authorize_token(
     let kid = header.kid.ok_or_else(|| Error::MissingKidError)?;
 
     // Fetch the JWKS from the issuer's domain and find the JWK with the matching kid.
-    let jwks = remote_jwk_set.jwk_set().await?;
-    let jwk = jwks.find(&kid).ok_or_else(|| Error::InvalidKidError)?;
+    let jwk = remote_jwk_set
+        .find(&kid)
+        .await?
+        .ok_or_else(|| Error::InvalidKidError)?;
 
     let decoding_key = match jwk.clone().algorithm {
         AlgorithmParameters::RSA(ref rsa) => DecodingKey::from_rsa_components(&rsa.n, &rsa.e)
