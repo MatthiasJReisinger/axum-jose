@@ -18,6 +18,9 @@ use crate::jwk_set::JwkSet;
 use crate::remote_jwk_set::RemoteJwkSet;
 use crate::Error;
 
+/// Authorization middleware for `axum`.
+///
+/// This middleware authorizes incoming requests by checking the `Authorization` header for a valid `Bearer` token. It extracts a JWT from the header and verifies it against a given JWK set.
 #[derive(Clone)]
 pub struct AuthorizationLayer {
     jwk_set: JwkSet,
@@ -26,6 +29,7 @@ pub struct AuthorizationLayer {
 }
 
 impl AuthorizationLayer {
+    /// Create a new `AuthorizationLayer` that verifies JWTs against a JWK set fetched from a remote URL.
     pub fn with_remote_jwk_set(
         remote_jwk_set: RemoteJwkSet,
         issuer_url: Url,
@@ -38,6 +42,7 @@ impl AuthorizationLayer {
         }
     }
 
+    /// Create a new `AuthorizationLayer` that verifies JWTs against a local JWK set.
     pub fn with_local_jwk_set(
         jwk_set: jsonwebtoken::jwk::JwkSet,
         issuer_url: Url,
