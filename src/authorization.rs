@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use axum::extract::Request;
@@ -23,7 +24,7 @@ use crate::Error;
 /// This middleware authorizes incoming requests by checking the `Authorization` header for a valid `Bearer` token. It extracts a JWT from the header and verifies it against a given JWK set.
 #[derive(Clone)]
 pub struct AuthorizationLayer {
-    jwk_set: JwkSet,
+    jwk_set: Arc<JwkSet>,
     issuer_url: Url,
     audience: String,
 }
@@ -36,7 +37,7 @@ impl AuthorizationLayer {
         audience: String,
     ) -> Self {
         Self {
-            jwk_set: JwkSet::Remote(remote_jwk_set),
+            jwk_set: Arc::new(JwkSet::Remote(remote_jwk_set)),
             issuer_url,
             audience,
         }
@@ -49,7 +50,7 @@ impl AuthorizationLayer {
         audience: String,
     ) -> Self {
         Self {
-            jwk_set: JwkSet::Local(jwk_set),
+            jwk_set: Arc::new(JwkSet::Local(jwk_set)),
             issuer_url,
             audience,
         }
@@ -72,7 +73,7 @@ impl<S> Layer<S> for AuthorizationLayer {
 #[derive(Clone)]
 pub struct AuthorizationService<S> {
     inner: S,
-    jwk_set: JwkSet,
+    jwk_set: Arc<JwkSet>,
     issuer_url: Url,
     audience: String,
 }
@@ -105,7 +106,8 @@ where
         let issuer_url = self.issuer_url.clone();
         let audience = self.audience.clone();
         Box::pin(async move {
-            let authorize_result = authorize_request(&mut req, jwk_set, issuer_url, audience).await;
+            let authorize_result =
+                authorize_request(&mut req, &jwk_set, issuer_url, audience).await;
             match authorize_result {
                 Ok(claims) => {
                     req.extensions_mut().insert(Claims(claims));
@@ -119,7 +121,7 @@ where
 
 async fn authorize_request(
     req: &mut Request,
-    jwk_set: JwkSet, // TODO why not pass by reference?
+    jwk_set: &JwkSet,
     issuer_url: Url,
     audience: String,
 ) -> Result<serde_json::Value, Error> {
@@ -135,7 +137,7 @@ async fn authorize_request(
 
 async fn authorize_token(
     token: &str,
-    jwk_set: JwkSet,
+    jwk_set: &JwkSet,
     issuer_url: Url,
     audience: &str,
 ) -> Result<serde_json::Value, Error> {
@@ -267,7 +269,7 @@ mod test {
 
         let _decoded_claims = authorize_token(
             mock_auth_server.jwt_token(),
-            remote_jwk_set.into(),
+            &remote_jwk_set.into(),
             mock_auth_server.jwt_issuer().clone(),
             mock_auth_server.jwt_audience(),
         )
