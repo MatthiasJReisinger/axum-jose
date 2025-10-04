@@ -4,6 +4,14 @@ Lightweight authorization [middleware for `axum`](https://docs.rs/axum/latest/ax
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+## Contributing
+
+Set up git hooks by running the following command in the project root directory:
+
+```
+git config core.hooksPath hooks
+```
+
 ## License
 
 This project is licensed under the [MIT License](./LICENSE).
