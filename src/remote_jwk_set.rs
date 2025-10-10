@@ -122,7 +122,7 @@ impl RemoteJwkSet {
             .map_err(Error::from)?;
 
         if !response.status().is_success() {
-            return Err(Error::JwkSetResponseError {
+            return Err(Error::JwkSetRequestErrorResponse {
                 status_code: response.status(),
             });
         }

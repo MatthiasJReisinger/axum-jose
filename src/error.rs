@@ -6,26 +6,25 @@ use axum_extra::typed_header::TypedHeaderRejection;
 use http::StatusCode;
 use serde_json::json;
 
+#[non_exhaustive]
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    #[error(transparent)]
-    JwtError(#[from] jsonwebtoken::errors::Error),
     #[error("missing kid in token header")]
-    MissingKidError,
+    MissingKid,
     #[error("token header contains invalid kid")]
-    InvalidKidError,
+    InvalidKid,
     #[error(transparent)]
-    TypedHeaderError(#[from] TypedHeaderRejection),
-    #[error("failed to validate token")]
-    TokenValidationError,
+    InvalidAuthorizationHeader(#[from] TypedHeaderRejection),
+    #[error("unsupported algorithm: {algorithm}")]
+    UnsupportedAlgorithm { algorithm: String },
+    #[error("failed to decode JWK into key")]
+    InvalidJwk(#[source] jsonwebtoken::errors::Error),
+    #[error("JWT validation failed")]
+    InvalidJwt(#[source] jsonwebtoken::errors::Error),
     #[error("failed to fetch JWK set")]
-    JwkSetRequestError(#[from] reqwest::Error),
-    #[error("failed to fetch JWK set (status code: {status_code})")]
-    JwkSetResponseError { status_code: StatusCode },
-    #[error("rate limit error")]
-    JwkSetRateLimitError,
-    #[error("cache error")]
-    JwkSetCacheError,
+    FailedJwkSetRequest(#[from] reqwest::Error),
+    #[error("received error response when fetching JWK set: {status_code}")]
+    JwkSetRequestErrorResponse { status_code: StatusCode },
 }
 
 impl IntoResponse for Error {

@@ -142,26 +142,26 @@ async fn authorize_token(
     audience: &str,
 ) -> Result<serde_json::Value, Error> {
     // First, just decode the header part of the token, without validating the token, to get the kid.
-    let header = decode_header(token)?;
-    let kid = header.kid.ok_or_else(|| Error::MissingKidError)?;
+    let header = decode_header(token).map_err(Error::InvalidJwt)?;
+    let kid = header.kid.ok_or_else(|| Error::MissingKid)?;
 
     // Fetch the JWKS from the issuer's domain and find the JWK with the matching kid.
-    let jwk = jwk_set
-        .find(&kid)
-        .await?
-        .ok_or_else(|| Error::InvalidKidError)?;
+    let jwk = jwk_set.find(&kid).await?.ok_or_else(|| Error::InvalidKid)?;
 
     let decoding_key = match jwk.clone().algorithm {
-        AlgorithmParameters::RSA(ref rsa) => DecodingKey::from_rsa_components(&rsa.n, &rsa.e)
-            .map_err(|_| Error::TokenValidationError),
-        _ => Err(Error::TokenValidationError),
+        AlgorithmParameters::RSA(ref rsa) => {
+            DecodingKey::from_rsa_components(&rsa.n, &rsa.e).map_err(Error::InvalidJwk)
+        }
+        _ => Err(Error::UnsupportedAlgorithm {
+            algorithm: format!("{:?}", jwk.algorithm),
+        }),
     }?;
 
     let mut validation = Validation::new(header.alg);
     validation.set_audience(&[audience.to_string()]);
     validation.set_issuer(&[issuer_url]);
     let token = decode::<serde_json::Value>(token, &decoding_key, &validation)
-        .map_err(|_| Error::TokenValidationError)?;
+        .map_err(Error::InvalidJwt)?;
     Ok(token.claims)
 }
 

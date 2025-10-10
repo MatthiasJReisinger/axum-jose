@@ -71,9 +71,7 @@
 //!
 //! At the time of writing, the ecosystem around JOSE, OpenID Connect, and OAuth2 for `axum` and Rust is not yet as
 //! mature as in other languages and web frameworks. There is no clear best practice for implementing authorization for
-//! `axum`-based APIs but a number of crates, similar to this one.
-//!
-//! To name a few:
+//! `axum`-based APIs but a number of crates, similar to this one, exist. To name a few:
 //!
 //! - [axum-jwt](https://crates.io/crates/axum-jwt)
 //! - [axum-jkws](https://crates.io/crates/axum-jwks)
