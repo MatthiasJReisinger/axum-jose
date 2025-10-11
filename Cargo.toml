@@ -2,6 +2,9 @@
 name = "axum-jose"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+description = "Lightweight authorization middleware for `axum` following JSON Object Signing and Encryption (JOSE) standards."
+readme = "README.md"
 
 [dependencies]
 axum = "0.7.5"
