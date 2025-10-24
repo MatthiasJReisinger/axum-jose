@@ -15,8 +15,6 @@ pub enum Error {
     InvalidKid,
     #[error(transparent)]
     InvalidAuthorizationHeader(#[from] TypedHeaderRejection),
-    #[error("unsupported algorithm: {algorithm}")]
-    UnsupportedAlgorithm { algorithm: String },
     #[error("failed to decode JWK into key")]
     InvalidJwk(#[source] jsonwebtoken::errors::Error),
     #[error("JWT validation failed")]
