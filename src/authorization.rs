@@ -20,7 +20,8 @@ use crate::Error;
 
 /// Authorization middleware for `axum`.
 ///
-/// This middleware authorizes incoming requests by checking the `Authorization` header for a valid `Bearer` token. It extracts a JWT from the header and verifies it against a given JWK set.
+/// This middleware authorizes incoming requests by checking the `Authorization` header for a valid `Bearer` token. It
+/// extracts a JWT from the header and verifies it against a given JWK set.
 #[derive(Clone)]
 pub struct AuthorizationLayer {
     jwk_set: Arc<JwkSet>,

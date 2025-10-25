@@ -3,8 +3,8 @@
 Lightweight authorization [middleware for `axum`](https://docs.rs/axum/latest/axum/middleware/index.html), following [JOSE (JSON Object Signing and Encryption) standards](https://datatracker.ietf.org/wg/jose/charter/).
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Crates.io](https://img.shields.io/crates/v/axum-jose)](https://crates.io/crates/axum)
-[![Documentation](https://docs.rs/axum/badge.svg)](https://docs.rs/axum-jose)
+[![Crates.io](https://img.shields.io/crates/v/axum-jose)](https://crates.io/crates/axum-jose)
+[![Documentation](https://docs.rs/axum-jose/badge.svg)](https://docs.rs/axum-jose)
 [![Build status](https://github.com/MatthiasJReisinger/axum-jose/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/MatthiasJReisinger/axum-jose/actions/workflows/rust.yml)
 
 ## Overview
@@ -23,37 +23,46 @@ which provide the building blocks for [JSON Web Tokens (JWT)](https://datatracke
 
 ## Features
 
-- **JWT Validation**: Transparently extract and validate JWTs from `Authorization` headers against JWK sets (local or remote).
-- **Caching**: Caching of remote JWK sets to minimize provider requests.
-- **Rate Limiting**: Configurable rate limiting prevents overloading your identity provider's JWK endpoints.
+- **JWT Validation**: Transparently extract JWTs from `Authorization` headers and validate them against JWK sets to
+  authorize incoming requests.
+- **Caching**: Use caching to minimize latency and avoid fetching JWK sets from authorization servers on every request.
+- **Rate Limiting**: Prevent running into your identity provider's rate limits when fetching JWKs by configuring
+  client-side rate limiting.
 
 ## Quickstart
 
-```rust,no_run
+```rust
 use axum::{routing::get, Router};
-use axum_jose::{RemoteJwkSet, AuthorizationLayer};
-use url::Url;
-use std::time::Duration;
+use axum_jose::{AuthorizationLayer, RemoteJwkSet};
 use std::num::NonZero;
+use std::time::Duration;
+use url::Url;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Configure remote JWK set from your OIDC provider
-    let remote_jwk_set = RemoteJwkSet::builder(
-        Url::parse("https://your.oidc.provider/.well-known/jwks.json")?
-    )
+    // Configure a `RemoteJwkSet` to fetch the JWK set e.g. from your OpenID
+    // Connect provider which typically exposes JWK sets at a
+    // `.well-known/jwks.json` endpoint
+    let remote_jwk_set = RemoteJwkSet::builder(Url::parse(
+        "https://your.oidc.provider/.well-known/jwks.json",
+    )?)
+    // Use caching to avoid fetching the JWK set on every request
     .with_cache(Duration::from_secs(300))
+    // Configure rate limiting to avoid hitting provider limits
     .with_rate_limit(NonZero::new(10).unwrap(), Duration::from_secs(60))
     .build();
 
-    // Protect your routes with the authorization layer
+    // Create an authorization layer using the remote JWK set to validate JWTs.
+    let authorization_layer = AuthorizationLayer::with_remote_jwk_set(
+        remote_jwk_set,
+        Url::parse("https://your.jwt.issuer")?,
+        "your.jwt.audience".to_string(),
+    );
+
+    // Protect your `axum` routes with the authorization layer.
     let router = Router::new()
         .route("/protected", get(|| async { "Hello, authorized user!" }))
-        .layer(AuthorizationLayer::with_remote_jwk_set(
-            remote_jwk_set,
-            Url::parse("https://your.jwt.issuer")?,
-            "your.jwt.audience".to_string(),
-        ));
+        .layer(authorization_layer);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     axum::serve(listener, router).await?;

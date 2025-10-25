@@ -24,32 +24,36 @@
 //!
 //! ```rust,no_run
 //! use axum::{routing::get, Router};
-//! use axum_jose::{RemoteJwkSet, AuthorizationLayer};
-//! use url::Url;
-//! use std::time::Duration;
+//! use axum_jose::{AuthorizationLayer, RemoteJwkSet};
 //! use std::num::NonZero;
+//! use std::time::Duration;
+//! use url::Url;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Configure a RemoteJwkSet with caching and rate limiting
-//!     let remote_jwk_set = RemoteJwkSet::builder(
-//!         Url::parse("https://your.oidc.provider/.well-known/jwks.json")?
-//!     )
-//!     .with_cache(Duration::from_secs(300))  // Cache for 5 minutes
-//!     .with_rate_limit(NonZero::new(10).unwrap(), Duration::from_secs(60))  // 10 requests per minute
+//!     // Configure a `RemoteJwkSet` to fetch the JWK set e.g. from your OpenID
+//!     // Connect provider which typically exposes JWK sets at a
+//!     // `.well-known/jwks.json` endpoint
+//!     let remote_jwk_set = RemoteJwkSet::builder(Url::parse(
+//!         "https://your.oidc.provider/.well-known/jwks.json",
+//!     )?)
+//!     // Use caching to avoid fetching the JWK set on every request
+//!     .with_cache(Duration::from_secs(300))
+//!     // Configure rate limiting to avoid hitting provider limits
+//!     .with_rate_limit(NonZero::new(10).unwrap(), Duration::from_secs(60))
 //!     .build();
 //!
-//!     // Create an authorization layer...
-//!     let auth_layer = AuthorizationLayer::with_remote_jwk_set(
+//!     // Create an authorization layer using the remote JWK set to validate JWTs.
+//!     let authorization_layer = AuthorizationLayer::with_remote_jwk_set(
 //!         remote_jwk_set,
 //!         Url::parse("https://your.jwt.issuer")?,
 //!         "your.jwt.audience".to_string(),
 //!     );
 //!
-//!     // ...and apply it to your routes
+//!     // Protect your `axum` routes with the authorization layer.
 //!     let router = Router::new()
-//!         .route("/protected", get(|| async { "Authorized!" }))
-//!         .layer(auth_layer);
+//!         .route("/protected", get(|| async { "Hello, authorized user!" }))
+//!         .layer(authorization_layer);
 //!
 //!     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
 //!     axum::serve(listener, router).await?;
@@ -167,10 +171,9 @@
 //! See [`Error`] for more details on possible error cases.
 
 pub mod authorization;
-pub use error::Error;
-
 pub use authorization::AuthorizationLayer;
-pub use remote_jwk_set::RemoteJwkSet;
+pub use error::Error;
+pub use remote_jwk_set::{RemoteJwkSet, RemoteJwkSetBuilder};
 
 mod error;
 mod jwk_set;
