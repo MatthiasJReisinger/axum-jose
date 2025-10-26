@@ -1,4 +1,4 @@
-//! axum-jose Lightweight authorization [middleware for `axum`](https://docs.rs/axum/latest/axum/middleware/index.html),
+//! Lightweight authorization [middleware for `axum`](https://docs.rs/axum/latest/axum/middleware/index.html),
 //! following [JSON Object Signing and Encryption (JOSE)](https://datatracker.ietf.org/wg/jose/charter/) standards.
 //!
 //! # Overview
