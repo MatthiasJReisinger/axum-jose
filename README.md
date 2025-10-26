@@ -1,6 +1,7 @@
 # axum-jose
 
-Lightweight authorization [middleware for `axum`](https://docs.rs/axum/latest/axum/middleware/index.html), following [JOSE (JSON Object Signing and Encryption) standards](https://datatracker.ietf.org/wg/jose/charter/).
+Lightweight authorization [middleware for `axum`](https://docs.rs/axum/latest/axum/middleware/index.html), following
+[JOSE (JSON Object Signing and Encryption) standards](https://datatracker.ietf.org/wg/jose/charter/).
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Crates.io](https://img.shields.io/crates/v/axum-jose)](https://crates.io/crates/axum-jose)
@@ -9,12 +10,13 @@ Lightweight authorization [middleware for `axum`](https://docs.rs/axum/latest/ax
 
 ## Overview
 
-Add JWT-based authorization to your [`axum`](https://crates.io/crates/axum) applications with a simple, [`tower`](https://crates.io/crates/tower)-compatible middleware layer that integrates seamlessly with OpenID Connect and OAuth2 providers.
+Add JWT-based authorization to your [`axum`](https://crates.io/crates/axum) applications with a simple,
+[`tower`](https://crates.io/crates/tower)-compatible middleware layer that integrates seamlessly with OpenID Connect and
+OAuth2 providers.
 
-### JOSE (JSON Object Signing and Encryption) Standards
-
-[JOSE](https://datatracker.ietf.org/wg/jose/charter/) is an umbrella for specifications that form the foundation of
-modern authentication and authorization protocol like OpenID Connect and OAuth2. Core specifications include e.g.
+More broadly speaking, this crate follows the [JOSE (JSON Object Signing and Encryption) framework](https://datatracker.ietf.org/wg/jose/charter/)
+which is an umbrella for specifications that form the foundation of modern authentication and authorization protocols.
+Core specifications include e.g.
 [JSON Web Signatures (JWS)](https://datatracker.ietf.org/doc/html/rfc7515),
 [JSON Web Encryption (JWE)](https://datatracker.ietf.org/doc/html/rfc7516),
 [JSON Web Algorithms (JWA)](https://datatracker.ietf.org/doc/html/rfc7518),
