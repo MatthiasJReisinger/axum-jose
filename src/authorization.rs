@@ -160,7 +160,7 @@ async fn authorize_token(
 mod test {
     use std::time::SystemTime;
 
-    use axum::routing::get;
+    use axum::{routing::get, Extension};
     use http::StatusCode;
     use jsonwebtoken::{
         jwk::{AlgorithmParameters, CommonParameters, KeyAlgorithm},
@@ -175,7 +175,10 @@ mod test {
     };
 
     use super::{authorize_token, AuthorizationLayer};
-    use crate::remote_jwk_set::{RemoteJwkSet, RemoteJwkSetBuilder};
+    use crate::{
+        authorization::Claims,
+        remote_jwk_set::{RemoteJwkSet, RemoteJwkSetBuilder},
+    };
 
     struct MockAuthServer {
         _inner_server: MockServer,
@@ -345,6 +348,53 @@ mod test {
         assert_eq!(
             response.json::<serde_json::Value>().await.unwrap(),
             serde_json::json!({"error": "Header of type `authorization` was missing"})
+        );
+    }
+
+    #[tokio::test]
+    async fn test_middleware_injects_claims_into_request_extensions() {
+        let mock_auth_server = MockAuthServer::new().await;
+
+        let remote_jwk_set = RemoteJwkSet::builder(mock_auth_server.jwts_url()).build();
+
+        let router = axum::Router::new()
+            .route(
+                "/protected",
+                get(|Extension(Claims(claims)): Extension<Claims>| async { axum::Json(claims) }),
+            )
+            .layer(AuthorizationLayer::with_remote_jwk_set(
+                remote_jwk_set,
+                mock_auth_server.jwt_issuer().clone(),
+                mock_auth_server.jwt_audience().to_string(),
+            ));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let axum_server_addr = listener.local_addr().unwrap();
+
+        let axum_shutdown_token = CancellationToken::new();
+        let axum_shutdown_signal = axum_shutdown_token.clone().cancelled_owned();
+        let _axum_shutdown_guard = axum_shutdown_token.drop_guard();
+        task::spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(axum_shutdown_signal)
+                .await
+                .unwrap();
+        });
+
+        let client = reqwest::Client::new();
+        let response = client
+            .get(format!("http://{axum_server_addr}/protected"))
+            .bearer_auth(mock_auth_server.jwt_token())
+            .send()
+            .await
+            .unwrap();
+
+        let claims = response.json::<serde_json::Value>().await.unwrap();
+        assert!(claims.get("sub").is_some());
+        assert_eq!(claims.get("aud").unwrap(), mock_auth_server.jwt_audience());
+        assert_eq!(
+            claims.get("iss").unwrap(),
+            mock_auth_server.jwt_issuer().as_str()
         );
     }
 }
