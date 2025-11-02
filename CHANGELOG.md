@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/MatthiasJReisinger/axum-jose/compare/v0.2.0...v0.2.1) - 2025-11-02
+
+### Other
+
+- Fix formatting in crate docs
+- Update Cargo.lock
+- *(deps)* Bump jsonwebtoken from 9.3.1 to 10.1.0 ([#7](https://github.com/MatthiasJReisinger/axum-jose/pull/7))
+- *(deps)* Bump reqwest from 0.12.23 to 0.12.24 ([#6](https://github.com/MatthiasJReisinger/axum-jose/pull/6))
+- Configure dependabot group for tower crates
+- Remove obsolete dependencies
+- Increase dependabot's open pull request limit
+- Configure dependabot group for axum crates
+- *(deps)* Bump axum from 0.7.9 to 0.8.6 ([#3](https://github.com/MatthiasJReisinger/axum-jose/pull/3))
+- *(deps)* Bump tokio from 1.47.1 to 1.48.0 ([#2](https://github.com/MatthiasJReisinger/axum-jose/pull/2))
+- *(deps)* Bump openssl from 0.10.73 to 0.10.74 ([#4](https://github.com/MatthiasJReisinger/axum-jose/pull/4))
+- *(deps)* Bump thiserror from 1.0.69 to 2.0.17 ([#5](https://github.com/MatthiasJReisinger/axum-jose/pull/5))
+- *(deps)* Bump base64-url from 3.0.0 to 3.0.2 ([#1](https://github.com/MatthiasJReisinger/axum-jose/pull/1))
+- Enable version updates via dependabot
+- Add test for claim extraction
+- Fix accident in crate docs
+- Update release manual
+
 ## [0.2.0](https://github.com/MatthiasJReisinger/axum-jose/compare/v0.1.0...v0.2.0) - 2025-10-26
 
 ### Added
