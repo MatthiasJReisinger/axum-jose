@@ -7,9 +7,7 @@
 //! middleware system to add JWT-based authorization to your application. The middleware validates JWTs from incoming
 //! requests against JWK (JSON Web Key) sets, which can be either provided locally or fetched from remote identity providers.
 //!
-//! # Getting Started
-//!
-//! ## Basic Setup
+//! # Quickstart
 //!
 //! This example illustrates how to validate JWTs against a remote JWK set provided e.g. by your OpenID Connect
 //! provider.
@@ -61,7 +59,7 @@
 //! }
 //! ```
 //!
-//! ## Accessing JWT Claims
+//! # Accessing JWT Claims
 //!
 //! After successful authorization, the JWT claims are available via axum's request extensions:
 //!
@@ -102,7 +100,7 @@
 //! }
 //! ```
 //!
-//! ## Custom HTTP Client
+//! # Custom HTTP Client
 //!
 //! Provide a custom `reqwest::Client` for specific requirements like timeouts, proxies, etc.:
 //!
@@ -125,7 +123,7 @@
 //! # }
 //! ```
 //!
-//! ## Using a Local JWK Set
+//! # Using a Local JWK Set
 //!
 //! For testing purposes or scenarios where you manage keys locally you can use a `jsonwebtoken::jwk::JwkSet` directly
 //! instead of fetching one from a remote URL:
