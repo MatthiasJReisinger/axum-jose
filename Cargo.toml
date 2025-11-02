@@ -32,6 +32,6 @@ url = "2.5.2"
 base64-url = "3.0.2"
 openssl = "0.10.74"
 reqwest = { version = "0.12.7", features = ["json"] }
-tokio = { version = "1.40.0", features = ["full"] }
+tokio = { version = "1.48.0", features = ["full"] }
 tokio-util = "0.7.13"
 wiremock = "0.6.2"
