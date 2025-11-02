@@ -9,3 +9,6 @@ updates:
       axum:
         patterns:
           - "axum*"
+      tower:
+        patterns:
+          - "tower*"
