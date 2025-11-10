@@ -8,7 +8,7 @@ readme = "README.md"
 
 [dependencies]
 axum = "0.8.6"
-axum-extra = { version = "0.12.0", features = ["typed-header"] }
+axum-extra = { version = "0.12.1", features = ["typed-header"] }
 futures = "0.3.30"
 governor = "0.10.1"
 http = "1.1.0"
