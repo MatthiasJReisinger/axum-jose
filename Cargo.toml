@@ -12,7 +12,7 @@ axum-extra = { version = "0.12.0", features = ["typed-header"] }
 futures = "0.3.30"
 governor = "0.10.1"
 http = "1.1.0"
-jsonwebtoken = { version = "10.1.0", features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "10.2.0", features = ["aws_lc_rs"] }
 moka = { version = "0.12.10", features = ["future"] }
 reqwest = { version = "0.12.24", features = ["json"] }
 serde = "1.0.209"
