@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/MatthiasJReisinger/axum-jose/compare/v0.2.1...v0.2.2) - 2025-11-15
+
+### Other
+
+- *(deps)* Bump the axum group across 1 directory with 2 updates ([#13](https://github.com/MatthiasJReisinger/axum-jose/pull/13))
+- *(deps)* Bump jsonwebtoken from 10.1.0 to 10.2.0 ([#11](https://github.com/MatthiasJReisinger/axum-jose/pull/11))
+- *(deps)* Bump openssl from 0.10.74 to 0.10.75 ([#12](https://github.com/MatthiasJReisinger/axum-jose/pull/12))
+- Add keywords and category slugs in Cargo.toml
+- *(deps)* Bump tokio-util from 0.7.16 to 0.7.17 ([#10](https://github.com/MatthiasJReisinger/axum-jose/pull/10))
+
 ## [0.2.1](https://github.com/MatthiasJReisinger/axum-jose/compare/v0.2.0...v0.2.1) - 2025-11-02
 
 ### Other
