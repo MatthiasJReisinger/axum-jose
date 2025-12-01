@@ -24,7 +24,7 @@ thiserror = "2.0.17"
 tower = { version = "0.5.1", features = ["buffer", "limit", "util"] }
 tower-layer = "0.3.3"
 tower-service = "0.3.3"
-tracing = "0.1.40"
+tracing = "0.1.43"
 uri = "0.4.0"
 url = "2.5.2"
 
