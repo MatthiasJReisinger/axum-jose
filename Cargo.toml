@@ -19,7 +19,7 @@ moka = { version = "0.12.12", features = ["future"] }
 reqwest = { version = "0.12.27", features = ["json"] }
 serde = "1.0.209"
 serde_derive = "1.0.209"
-serde_json = "1.0.146"
+serde_json = "1.0.148"
 thiserror = "2.0.17"
 tower = { version = "0.5.1", features = ["buffer", "limit", "util"] }
 tower-layer = "0.3.3"
